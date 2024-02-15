@@ -40,7 +40,8 @@
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 const int ENC_BOUNCE_THRESHHOLD = 10;
-const int SAMPLE_PERIOD = 20;
+const int PROCESS_PERIOD = 20;
+const int ENC_SAMPLE_PERIOD = 100;
 const int MIN_SPEED = 25;
 const int MAX_SPEED = 200;
 const int MAX_SPEED_HOMING = 35;
@@ -233,7 +234,7 @@ public:
     // Held
     else if (isPressed && digitalRead(buttonPin)) {
       if (timeSincePress < 10000) {
-        timeSincePress += SAMPLE_PERIOD;
+        timeSincePress += PROCESS_PERIOD;
       }
 
       if (timeSincePress > BUTTON_TAP_THRESHHOLD && !isHeld) {
@@ -245,7 +246,7 @@ public:
     // Idle
     else if (!isPressed && !digitalRead(buttonPin)) {
       if (timeSinceRelease < 10000) {
-        timeSinceRelease += SAMPLE_PERIOD;
+        timeSinceRelease += PROCESS_PERIOD;
       }
       
       if (timeSinceRelease > BUTTON_IDLE_THRESHHOLD && multiTapNotSent) {
@@ -283,6 +284,7 @@ bool isHomed = false;
 // Encoder logic
 volatile long curEncTime = 0;
 volatile long lastEncTime = 0;
+long long loopTime = 0;
 
 //===oOo==={    Motionstates     }===oOo===//
 
@@ -332,6 +334,9 @@ bool overrideEnabled = true;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Function Declarations //
+void checkEncoder();
+void standardProcess();
+
 void encAChange();
 void encBChange();
 void encChange(bool);
@@ -380,8 +385,8 @@ void setup() {
   pinMode(P_C6,INPUT);
   pinMode(P_CLED,OUTPUT);
 
-  attachInterrupt(digitalPinToInterrupt(P_ENCA),encAChange,CHANGE);
-  attachInterrupt(digitalPinToInterrupt(P_ENCB),encBChange,CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(P_ENCA),encAChange,CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(P_ENCB),encBChange,CHANGE);
 
   strip.begin();
   strip.setAllLedsColor(100,100,100);
@@ -393,16 +398,23 @@ void setup() {
 
 /*=============================================================================================================================================================*/
 
+unsigned long startTimeEnc = micros();
+unsigned long startTimeStd = millis();
+
 void loop() {
+  if(micros() - startTimeEnc > ENC_SAMPLE_PERIOD) {
+    checkEncoder();
+    startTimeEnc = micros();
+  }
 
-  /* if ((millis() > 3000) && (millis() < 3100)){
-    setMotor(1,150,P_DSPD,P_DM1,P_DM2);
-  } else if ((millis() > 10000) && (millis() < 10100)){
-    setMotor(0,1,P_DSPD,P_DM1,P_DM2);
-  } */
+  if(millis() - startTimeEnc > PROCESS_PERIOD) {
+    standardProcess();
+    startTimeStd = millis();
+  }
+  
+}
 
-  delay(SAMPLE_PERIOD);
-
+void standardProcess() {
   rotRawLast = rotRaw;
 
   rotWorm = rotRaw * ratioEncToWorm;
@@ -474,7 +486,7 @@ void loop() {
 
 /*=============================================================================================================================================================*/
 
-void IRAM_ATTR encAChange(){
+/* void IRAM_ATTR encAChange(){
   encChange(true);
 }
 
@@ -482,9 +494,6 @@ void IRAM_ATTR encAChange(){
 void IRAM_ATTR encBChange(){
   encChange(false);
 }
-
-int ab_states[1000];
-int ab_index = 0;
 
 // A generalized function to indetify encoder state and increment/decrement raw rotation value appropriately.
 void IRAM_ATTR encChange(bool detectA){
@@ -494,14 +503,11 @@ void IRAM_ATTR encChange(bool detectA){
     bool A = digitalRead(P_ENCA);
     bool B = digitalRead(P_ENCB); 
 
-    ab_states[ab_index] = 10 * A + B;
-    ab_index = (++ab_index)%1000;
-
     if ((A^B && detectA) || (!(A^B) && !detectA)) {rotRaw++;} else {rotRaw--;}
 
     //lastEncTime = curEncTime;
   //}
-}
+} */
 
 void buttonUpHold() {
 
@@ -729,7 +735,7 @@ int historyIndex = 0;
 
 void checkForStall() {
   if ((rotRaw == rotRawLast) && (motor.mag != 0)) {
-    msStalled += SAMPLE_PERIOD;
+    msStalled += PROCESS_PERIOD;
     history[historyIndex] = rotRaw;
     historyIndex = ++historyIndex%1000;
   } else if ((rotRaw != rotRawLast) || (motor.mag == 0)) {
@@ -740,16 +746,6 @@ void checkForStall() {
     Serial.println("Stall detected.  Killing motor. ");
     Serial.print(msStalled);Serial.print(" ms. ");Serial.print(rotRaw);Serial.print(" : ");Serial.print(rotRawLast);Serial.print(" : ");Serial.println(motor.mag);
     
-    for(int i = 0; i < historyIndex; i++) {
-      Serial.println(history[i]);
-    }
-    Serial.println("=====================================");
-    for(int i = 0; i < ab_index; i++) {
-      Serial.println(ab_states[i]);
-    }
-
-
-
     opType = 0;
     if (motor.dir == -1) {
       Serial.println("Assuming this to be the new zero zPos.  Setting as home.");
