@@ -41,7 +41,7 @@
 
 const int ENC_BOUNCE_THRESHHOLD = 10;
 const int PROCESS_PERIOD = 20;
-const int ENC_SAMPLE_PERIOD = 100;
+const int ENC_SAMPLE_PERIOD = 1000;
 const int MIN_SPEED = 25;
 const int MAX_SPEED = 200;
 const int MAX_SPEED_HOMING = 35;
@@ -337,10 +337,6 @@ bool overrideEnabled = true;
 void checkEncoder();
 void standardProcess();
 
-void encAChange();
-void encBChange();
-void encChange(bool);
-
 void changeOpType(int);
 void changeLEDcolor(int,int[]);
 void changeLEDcolorAll(int[]);
@@ -385,9 +381,6 @@ void setup() {
   pinMode(P_C6,INPUT);
   pinMode(P_CLED,OUTPUT);
 
-  //attachInterrupt(digitalPinToInterrupt(P_ENCA),encAChange,CHANGE);
-  //attachInterrupt(digitalPinToInterrupt(P_ENCB),encBChange,CHANGE);
-
   strip.begin();
   strip.setAllLedsColor(100,100,100);
 
@@ -412,6 +405,39 @@ void loop() {
     startTimeStd = millis();
   }
   
+}
+
+uint8_t encState = 0;
+uint8_t prevEncState = 0;
+
+void checkEncoder() {
+  prevEncState = encState;
+  encState = (digitalRead(P_ENCA) << 1) + digitalRead(P_ENCB);
+  switch ((encState^prevEncState)<<2+encState) {
+    case 0:   // 0000; AB = 00; No Change
+    case 4:   // 0100; AB = 01; No Change
+    case 8:   // 1000; AB = 10; No Change
+    case 12:  // 1100; AB = 11; No Change
+      break;
+    case 1:   // 0001; AB = 00; Changed from 01
+    case 5:   // 0101; AB = 01; Changed from 00
+    case 9:   // 1001; AB = 10; Changed from 11
+    case 13:  // 1101; AB = 11; Changed from 10
+      rotRaw++;
+      break;
+    case 2:   // 0010; AB = 00; Changed from 10
+    case 6:   // 0110; AB = 01; Changed from 11
+    case 10:  // 1010; AB = 10; Changed from 00
+    case 14:  // 1110; AB = 11; Changed from 01
+      rotRaw--;
+      break;
+    case 3:   // 0011; AB = 00; Changed from 11 (IMPOSSIBLE)
+    case 7:   // 0111; AB = 01; Changed from 10 (IMPOSSIBLE)
+    case 11:  // 1011; AB = 10; Changed from 01 (IMPOSSIBLE)
+    case 15:  // 1111; AB = 11; Changed from 00 (IMPOSSIBLE)
+      // Things broke, yo.
+      break;
+  }
 }
 
 void standardProcess() {
@@ -485,29 +511,6 @@ void standardProcess() {
 }
 
 /*=============================================================================================================================================================*/
-
-/* void IRAM_ATTR encAChange(){
-  encChange(true);
-}
-
-
-void IRAM_ATTR encBChange(){
-  encChange(false);
-}
-
-// A generalized function to indetify encoder state and increment/decrement raw rotation value appropriately.
-void IRAM_ATTR encChange(bool detectA){
-  //curEncTime = (long)millis();
-  //long tDelta = curEncTime-lastEncTime;
-  //if (tDelta>=ENC_BOUNCE_THRESHHOLD){
-    bool A = digitalRead(P_ENCA);
-    bool B = digitalRead(P_ENCB); 
-
-    if ((A^B && detectA) || (!(A^B) && !detectA)) {rotRaw++;} else {rotRaw--;}
-
-    //lastEncTime = curEncTime;
-  //}
-} */
 
 void buttonUpHold() {
 
@@ -601,7 +604,6 @@ void buttonUpMultiTap(int timesTapped) {
   }
 };
 
-
 void buttonDownHold() {
 
   // Panel is unlocked
@@ -692,8 +694,6 @@ void buttonDownMultiTap(int timesTapped) {
   }
 };
 
-
-
 void changeOpType(int ot) {
   switch (ot) {
     case 0:
@@ -730,14 +730,9 @@ void toggleLock() {
   }    
 };
 
-int history[1000];
-int historyIndex = 0;
-
 void checkForStall() {
   if ((rotRaw == rotRawLast) && (motor.mag != 0)) {
     msStalled += PROCESS_PERIOD;
-    history[historyIndex] = rotRaw;
-    historyIndex = ++historyIndex%1000;
   } else if ((rotRaw != rotRawLast) || (motor.mag == 0)) {
     msStalled = 0;
   }
