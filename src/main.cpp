@@ -282,9 +282,11 @@ bool isHomed = false;
 
 //===oOo==={       Encoder        }===oOo===//
 // Encoder logic
-volatile long curEncTime = 0;
-volatile long lastEncTime = 0;
+//volatile long curEncTime = 0;
+//volatile long lastEncTime = 0;
 long long loopTime = 0;
+uint8_t encState = 0;
+uint8_t prevEncState = 0;
 
 //===oOo==={    Motionstates     }===oOo===//
 
@@ -386,7 +388,6 @@ void setup() {
 
   Serial.println("Begin.");
   PIDpos.changeSetpoint(TARGETPOS);
-  delay(1000);
 }
 
 /*=============================================================================================================================================================*/
@@ -394,48 +395,62 @@ void setup() {
 unsigned long startTimeEnc = micros();
 unsigned long startTimeStd = millis();
 
+const int DEBUG_CYCLE_TIMES = 20;
+int debug_array[DEBUG_CYCLE_TIMES];
+int debug_i = 0;
+
+int totalState;
+
 void loop() {
+  
+  //~2us completion time
   if(micros() - startTimeEnc > ENC_SAMPLE_PERIOD) {
     checkEncoder();
     startTimeEnc = micros();
   }
-
-  if(millis() - startTimeEnc > PROCESS_PERIOD) {
+  
+  //~32us completion time, but LEDs break if run too quickly (1ms is too fast, 20ms is adequate)
+  if(millis() - startTimeStd > PROCESS_PERIOD) {
+    //Serial.print(encState);Serial.print(" ");Serial.print(prevEncState);Serial.print(" ");Serial.print(totalState);Serial.print(" ");Serial.println(rotRaw);
+    if (debug_i < DEBUG_CYCLE_TIMES) {debug_array[debug_i] = micros(); debug_i++;}
+    if (debug_i == DEBUG_CYCLE_TIMES) {debug_i++; for (int i=0;i<DEBUG_CYCLE_TIMES;i++) {Serial.println(debug_array[i]);}}
     standardProcess();
     startTimeStd = millis();
   }
   
 }
 
-uint8_t encState = 0;
-uint8_t prevEncState = 0;
+
 
 void checkEncoder() {
   prevEncState = encState;
   encState = (digitalRead(P_ENCA) << 1) + digitalRead(P_ENCB);
-  switch ((encState^prevEncState)<<2+encState) {
+  
+  //state takes the form of 4 bit number: [PIN A STATE] [PIN B STATE] [DID A CHANGE] [DID B CHANGE]
+  totalState = (encState<<2)+(encState^prevEncState);
+  switch (totalState) {
     case 0:   // 0000; AB = 00; No Change
     case 4:   // 0100; AB = 01; No Change
     case 8:   // 1000; AB = 10; No Change
     case 12:  // 1100; AB = 11; No Change
       break;
-    case 1:   // 0001; AB = 00; Changed from 01
-    case 5:   // 0101; AB = 01; Changed from 00
-    case 9:   // 1001; AB = 10; Changed from 11
-    case 13:  // 1101; AB = 11; Changed from 10
+    case 1:   // 0001; AB = 00; Changed from 01; Up
+    case 6:   // 0110; AB = 01; Changed from 11; Up
+    case 10:  // 1010; AB = 10; Changed from 00; Up
+    case 13:  // 1101; AB = 11; Changed from 10; Up
       rotRaw++;
       break;
-    case 2:   // 0010; AB = 00; Changed from 10
-    case 6:   // 0110; AB = 01; Changed from 11
-    case 10:  // 1010; AB = 10; Changed from 00
-    case 14:  // 1110; AB = 11; Changed from 01
+    case 2:   // 0010; AB = 00; Changed from 10; Down
+    case 5:   // 0101; AB = 01; Changed from 00; Down
+    case 9:   // 1001; AB = 10; Changed from 11; Down
+    case 14:  // 1110; AB = 11; Changed from 01; Down
       rotRaw--;
       break;
     case 3:   // 0011; AB = 00; Changed from 11 (IMPOSSIBLE)
     case 7:   // 0111; AB = 01; Changed from 10 (IMPOSSIBLE)
     case 11:  // 1011; AB = 10; Changed from 01 (IMPOSSIBLE)
     case 15:  // 1111; AB = 11; Changed from 00 (IMPOSSIBLE)
-      // Things broke, yo.
+      Serial.println("Impossible Encoder Signal Detected!");
       break;
   }
 }
@@ -591,14 +606,14 @@ void buttonUpMultiTap(int timesTapped) {
           changeLEDcolor(LED_UP,COL_UNAVAILABLE);
         }
         break;
-      case 10:
+      case 5:
         Serial.print("Manually setting home location.");
         isHomed = true;
         rotRaw = 0;
         break;
-      case 11:
+      case 7:
         overrideEnabled = !overrideEnabled;
-        Serial.print("Toggled Stall Check.  Enabled: "); Serial.println(overrideEnabled);
+        Serial.print("Toggled master override.  Enabled: "); Serial.println(overrideEnabled);
         break;
     }
   }
@@ -690,6 +705,9 @@ void buttonDownMultiTap(int timesTapped) {
         } else {
           changeLEDcolor(LED_DOWN,COL_UNAVAILABLE);
         }
+        break;
+      case 3:
+        Serial.print("Current position: ");Serial.print(rotRaw);Serial.print(" --- zPos: ");Serial.println(zPos);
     }
   }
 };
