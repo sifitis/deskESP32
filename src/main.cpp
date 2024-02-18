@@ -42,15 +42,15 @@
 const int ENC_BOUNCE_THRESHHOLD = 10;
 const int PROCESS_PERIOD = 20;
 const int ENC_SAMPLE_PERIOD = 1000;
-const int MIN_SPEED = 25;
+const int MIN_SPEED = 30;
 const int MAX_SPEED = 200;
 const int MAX_SPEED_HOMING = 35;
 const float MAX_ACCEL = 5;
 float TARGETPOS = 230;
 const float MAX_INT_WINDUP = 5.0F;
-const float EOT_BUFFER = 15.0F;
-const float EOT_BOT = 0.0F;
-const float EOT_TOP = 1000.0F;
+const int EOT_BUFFER = 100;
+const int EOT_BOT = 0;
+const int EOT_TOP = 4100;
 const int STALL_CUTOUT_MS = 250;
 
 const int BUTTON_TAP_THRESHHOLD = 250;
@@ -290,7 +290,7 @@ uint8_t prevEncState = 0;
 
 //===oOo==={    Motionstates     }===oOo===//
 
-volatile int rotRaw = 0;
+int rotRaw = 0;
 float rotWorm = 0.0f;
 float rotAxle = 0.0f;
 float zPos = 0.0f;
@@ -307,9 +307,9 @@ int motorSpeed = 0;
 MotorController motor(P_DSPD,P_DM1,P_DM2);
 
 // PID Control Parameters
-const float KPpos = .1;
+const float KPpos = .4;
 const float KIpos = 0.000;
-const float KDpos = 15;
+const float KDpos = 16;
 
 const float KPvel = 1.0F;
 const float KIvel = 0.0F;
@@ -329,7 +329,7 @@ bool continuousDown = false;
 
 // Stall Detection
 uint32_t msStalled = 0;
-bool overrideEnabled = true;
+bool overrideEnabled = false;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //   FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS  FUNCTIONS   //
@@ -355,6 +355,8 @@ void buttonDownMultiTap(int);
 
 void toggleLock();
 void checkForStall();
+
+void cycleTest();
 
 /*=============================================================================================================================================================*/
 
@@ -395,9 +397,14 @@ void setup() {
 unsigned long startTimeEnc = micros();
 unsigned long startTimeStd = millis();
 
-const int DEBUG_CYCLE_TIMES = 20;
-int debug_array[DEBUG_CYCLE_TIMES];
-int debug_i = 0;
+//Pertaining to a cycle test.
+const int CYCLE_TEST_MAX_COUNT = 50;
+unsigned long startTimeCycTest = millis();
+const unsigned long CYC_TEST_PERIOD = 1000;
+int cycTestIter = 0;
+int cycTestTimer = 60;
+bool cycleTestUnpaused = false;
+bool cycleTestUpwards = true;
 
 int totalState;
 
@@ -412,23 +419,53 @@ void loop() {
   //~32us completion time, but LEDs break if run too quickly (1ms is too fast, 20ms is adequate)
   if(millis() - startTimeStd > PROCESS_PERIOD) {
     //Serial.print(encState);Serial.print(" ");Serial.print(prevEncState);Serial.print(" ");Serial.print(totalState);Serial.print(" ");Serial.println(rotRaw);
-    if (debug_i < DEBUG_CYCLE_TIMES) {debug_array[debug_i] = micros(); debug_i++;}
-    if (debug_i == DEBUG_CYCLE_TIMES) {debug_i++; for (int i=0;i<DEBUG_CYCLE_TIMES;i++) {Serial.println(debug_array[i]);}}
     standardProcess();
     startTimeStd = millis();
   }
   
+  if(millis() - startTimeCycTest > CYC_TEST_PERIOD) {
+      cycleTest();
+      startTimeCycTest = millis();
+  }
 }
 
+void cycleTest() {
+  if (cycleTestUnpaused && (cycTestIter < CYCLE_TEST_MAX_COUNT)) {
 
+    switch (cycTestTimer) {
+      
+      case 0:
+        Serial.println("Beginning Test.");
+        cycTestTimer=60;
+        cycTestIter++;
+
+        if (cycleTestUpwards) {
+          changeLEDcolor(LED_UP,COL_SPECIAL);
+          continuousUp = true;
+          PIDpos.changeSetpoint(3900);
+          changeOpType(2);
+        } else {
+          changeLEDcolor(LED_DOWN,COL_SPECIAL);
+          continuousDown = true;
+          PIDpos.changeSetpoint(0);
+          changeOpType(2);
+        }
+        cycleTestUpwards = !cycleTestUpwards;
+        break;
+      default:
+        Serial.print("Cycle Test [");Serial.print(cycTestIter);Serial.print("] beginning in [");Serial.print(cycTestTimer);Serial.println("] seconds.");
+        cycTestTimer--;
+    }
+   
+  }
+}
 
 void checkEncoder() {
   prevEncState = encState;
   encState = (digitalRead(P_ENCA) << 1) + digitalRead(P_ENCB);
   
   //state takes the form of 4 bit number: [PIN A STATE] [PIN B STATE] [DID A CHANGE] [DID B CHANGE]
-  totalState = (encState<<2)+(encState^prevEncState);
-  switch (totalState) {
+  switch ((encState<<2)+(encState^prevEncState)) {
     case 0:   // 0000; AB = 00; No Change
     case 4:   // 0100; AB = 01; No Change
     case 8:   // 1000; AB = 10; No Change
@@ -456,7 +493,6 @@ void checkEncoder() {
 }
 
 void standardProcess() {
-  rotRawLast = rotRaw;
 
   rotWorm = rotRaw * ratioEncToWorm;
   rotAxle = rotWorm * ratioWormToAxle;
@@ -485,14 +521,15 @@ void standardProcess() {
       }
       break;
     case 2:  // In opType 2, the PID loop is driven by a desired position.
-      outputAccel = min(max(-MAX_ACCEL,PIDpos.compute(zPos)),MAX_ACCEL);
+      outputAccel = min(max(-MAX_ACCEL,PIDpos.compute(rotRaw)),MAX_ACCEL);
       motorSpeed = outputAccel + min(max(-MAX_SPEED,motorSpeed),MAX_SPEED);
       motor.setSpeed(motorSpeed);
       motor.apply();
-
       if (abs(motorSpeed) < 1) {
-        Serial.print("Arrived at target. Current position is ["); Serial.print(zPos); Serial.println("]. Switching to optype 0.");
+        Serial.print("Arrived at target. Current position is ["); Serial.print(rotRaw); Serial.println("]. Switching to optype 0.");
         opType = 0;
+        motor.setSpeed(0);
+        motor.apply();
         if (continuousUp) {
           continuousUp = false;
           strip.setLedColorData(0,60,60,60);
@@ -517,7 +554,8 @@ void standardProcess() {
       opType = 0;  Serial.println("Unknown optype; Switching to opType 0.");
   }
   
-  if (!overrideEnabled) {checkForStall();}
+  checkForStall();
+  rotRawLast = rotRaw;
 
   buttonUp.scan();
   buttonDown.scan();
@@ -614,6 +652,10 @@ void buttonUpMultiTap(int timesTapped) {
       case 7:
         overrideEnabled = !overrideEnabled;
         Serial.print("Toggled master override.  Enabled: "); Serial.println(overrideEnabled);
+        break;
+      case 11:
+        cycleTestUnpaused = !cycleTestUnpaused;
+        Serial.print("Toggled cycle testing.  Enabled: "); Serial.println(cycleTestUnpaused);
         break;
     }
   }
